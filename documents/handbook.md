@@ -8,4 +8,4 @@ Customers can request a refund within 30 days of purchase. Refunds are processed
 
 ## Team Structure
 
-The product team includes design, engineering, and support. We operate in a hybrid schedule with a shared office in Seattle.
+The product team includes design, engineering, and support. We operate in a hybrid schedule with a shared office in Seattele.
