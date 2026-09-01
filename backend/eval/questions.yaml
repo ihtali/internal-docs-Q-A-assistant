@@ -1,0 +1,40 @@
+- question: "What is the refund window?"
+  expected_source: "handbook.md"
+  expected_answer_contains: "30 days"
+  expect_refusal: false
+- question: "Who founded the company?"
+  expected_source: "handbook.md"
+  expected_answer_contains: "Ava Chen"
+  expect_refusal: false
+- question: "What is the capital of France?"
+  expected_source: ""
+  expected_answer_contains: ""
+  expect_refusal: true
+- question: "What is the remote work policy?"
+  expected_source: "policies.md"
+  expected_answer_contains: "three days"
+  expect_refusal: false
+- question: "What is the API base URL?"
+  expected_source: "api.md"
+  expected_answer_contains: "https://api.example.com"
+  expect_refusal: false
+- question: "When does the support team respond?"
+  expected_source: "support.md"
+  expected_answer_contains: "24 hours"
+  expect_refusal: false
+- question: "Which security standard is required?"
+  expected_source: "security.md"
+  expected_answer_contains: "SOC 2"
+  expect_refusal: false
+- question: "Where do we store the production keys?"
+  expected_source: "security.md"
+  expected_answer_contains: "Vault"
+  expect_refusal: false
+- question: "What is the name of the CEO?"
+  expected_source: "handbook.md"
+  expected_answer_contains: "Lena Ortiz"
+  expect_refusal: false
+- question: "What day is the office closed?"
+  expected_source: "policies.md"
+  expected_answer_contains: "Sunday"
+  expect_refusal: false
