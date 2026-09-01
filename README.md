@@ -1,91 +1,175 @@
 # Internal Docs Q&A Assistant
 
-An internal documentation assistant that ingests company docs and answers questions with grounded retrieval over a PostgreSQL + pgvector knowledge base.
+A production-style **RAG** (Retrieval-Augmented Generation) assistant for internal knowledge bases. Point it at a folder of documents (PDF, Markdown, plain text), and ask questions in plain English. Every answer is **grounded in your documents and cited back to the source** — and when the answer isn't in the docs, it says so instead of guessing.
 
-![Demo GIF](https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif)
+---
+
+## Why this exists
+
+Most internal knowledge lives in scattered PDFs, wikis, and handbooks that nobody can search well. This tool ingests that content into a vector database and lets staff get **trustworthy, sourced answers** — the single most common thing companies ask an AI engineer to build first. The focus here is on the parts that make RAG production-grade rather than a demo: **citations, refusal-when-unsure, and measured retrieval quality.**
+
+---
 
 ## Architecture
 
-```text
-documents/ --> ingestion --> Postgres + pgvector --> FastAPI --> React chat UI
-                     \                               /
-                      `--> retrieval + answer generation
+```
+                    ┌─────────────────────────────┐
+  documents/  ───▶  │  Ingestion pipeline         │
+  (pdf/md/txt)      │  load → chunk → embed → store│
+                    └──────────────┬──────────────┘
+                                   ▼
+                    ┌─────────────────────────────┐
+                    │  PostgreSQL + pgvector       │
+                    │  documents, chunks(+vector)  │
+                    └──────────────┬──────────────┘
+                                   ▼
+  React chat UI ◀──▶  FastAPI  ┌────────────────────────────────┐
+                     /ingest   │ /ask: embed q → similarity search│
+                     /ask      │ → build grounded prompt          │
+                     /health   │ → LLM → answer + source chunks   │
+                               └────────────────────────────────┘
+
+  Everything runs via docker-compose: [db] [api] [frontend]
 ```
 
-## Quickstart
+**Request flow for a question:** embed the query → cosine similarity search over chunk embeddings in pgvector → if best match is below threshold, refuse → otherwise build a grounded prompt from the top-k chunks → LLM generates the answer → API returns the answer plus structured source citations.
 
-1. Copy the example environment file:
-   ```bash
-   cp .env.example .env
-   ```
-2. Fill in your OpenAI key if you want to use the hosted providers. The app also has a local fallback path so it can run without external keys.
-3. Start the stack:
-   ```bash
-   docker compose up --build
-   ```
-4. Open http://localhost:5173
-
-## Ingesting documents
-
-Place supported files in the `documents/` folder and run:
-
-```bash
-curl -X POST http://localhost:8000/ingest \
-  -H 'Content-Type: application/json' \
-  -d '{"path":"documents/"}'
-```
-
-The ingestion service loads PDFs, Markdown, and text files, chunks them, embeds them, and stores the vectors.
-
-## Evaluation results
-
-The repo includes a retrieval/evaluation harness that prints a report based on the sample question set. Sample output from the included evaluation script:
-
-```text
-Retrieval hit rate: 90.0%
-Answer match rate: 85.0%
-Refusal accuracy: 100.0%
-```
+---
 
 ## Tech stack
 
-- Python 3.11
-- FastAPI
-- PostgreSQL 16 + pgvector
-- SQLAlchemy 2.x + psycopg
-- OpenAI embeddings + generation API
-- pypdf
-- React + Vite + TypeScript
-- Tailwind CSS
-- Docker + Docker Compose
-- pytest
+| Layer | Technology |
+|---|---|
+| Backend | Python 3.11, FastAPI, SQLAlchemy 2.x |
+| Vector store | PostgreSQL 16 + **pgvector** |
+| Embeddings | OpenAI `text-embedding-3-small` (1536-dim) |
+| Generation | OpenAI `gpt-4o-mini` (swappable to Anthropic Claude via env) |
+| Frontend | React + Vite + TypeScript + Tailwind CSS |
+| Infra | Docker Compose, GitHub Actions CI |
+| Testing / eval | pytest + a custom retrieval-evaluation harness |
+
+---
+
+## Quickstart
+
+**Prerequisites:** Docker + Docker Compose, and an OpenAI API key.
+
+```bash
+# 1. Clone
+git clone https://github.com/ihtali/docs-qa-assistant.git
+cd docs-qa-assistant
+
+# 2. Configure
+cp .env.example .env
+# open .env and set OPENAI_API_KEY=sk-...
+
+# 3. Run everything
+docker compose up --build
+```
+
+Then open **http://localhost:5173** for the chat UI. The API is at **http://localhost:8000** (`GET /health` to check it's alive).
+
+---
+
+## Ingesting documents
+
+Put your files in the `documents/` folder (PDF, `.md`, or `.txt`), then:
+
+```bash
+# via the ingest script
+docker compose exec api python scripts/ingest_folder.py documents/
+
+# or via the API
+curl -X POST http://localhost:8000/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"path": "documents/"}'
+```
+
+Re-running ingestion is idempotent — the same file won't be duplicated.
+
+---
+
+## Asking questions
+
+```bash
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the refund policy?", "top_k": 5}'
+```
+
+Example response:
+
+```json
+{
+  "answer": "Refunds are accepted within 30 days of purchase...",
+  "sources": [
+    { "filename": "handbook.pdf", "page": 12, "chunk_index": 40,
+      "snippet": "Refunds are accepted within 30 days...", "similarity": 0.82 }
+  ],
+  "grounded": true
+}
+```
+
+If the question isn't answerable from the documents, `grounded` is `false` and `answer` is a clear refusal — by design.
+
+---
+
+## Evaluation
+
+Retrieval quality is measured, not assumed. The harness runs a fixed set of gold questions (`backend/eval/questions.yaml`) and reports three headline metrics:
+
+```bash
+docker compose exec api python eval/run_eval.py
+```
+
+| Metric | Result |
+|---|---|
+| Retrieval hit rate (expected source in top-k) | <!-- TODO: real % --> |
+| Answer match rate | <!-- TODO: real % --> |
+| Refusal accuracy (correctly declines off-topic) | <!-- TODO: real % --> |
+
+> _Fill these in with the actual output of `run_eval.py`. Do not estimate — the point of this section is that the numbers are real and reproducible._
+
+---
 
 ## Design decisions
 
-- pgvector keeps the knowledge base and application state in one database, keeping the system simple to deploy.
-- The retrieval loop is intentionally written in plain Python to make the correctness and fallback behavior easy to reason about during interviews.
-- Refusal is enforced by requiring a minimum similarity threshold and by telling the LLM to answer only from context. If retrieval misses, the API returns a clear refusal rather than a hallucinated answer.
+A short note on the choices that matter, and why:
 
-## Local development
+- **pgvector instead of a managed vector DB (Pinecone/Weaviate).** Keeps everything in one Postgres instance — no extra service to run or pay for, simpler ops, and more than fast enough at this scale. Trades some scale ceiling for real simplicity.
+- **Plain-Python retrieval loop instead of a framework.** The retrieve → prompt → generate path is small and explicit, so behaviour is fully under control and easy to debug. (A framework-based version is a possible refactor, not a requirement.)
+- **Grounding + refusal enforced in the prompt.** The system is instructed to answer only from retrieved context and to decline otherwise, and a similarity threshold gates retrieval so weak matches trigger a refusal rather than a hallucinated answer.
+- **Citations returned as structured data, not parsed from the answer text.** The API attaches sources separately so the UI can render reliable, clickable citations.
 
-Backend:
+---
 
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+## Roadmap
+
+- [ ] Reranking of retrieved chunks (cross-encoder or LLM rerank)
+- [ ] Hybrid search (BM25 keyword + vector) for better recall
+- [ ] Streaming responses
+- [ ] Slack bot front-end
+- [ ] Claude vs GPT answer-quality comparison in the eval harness
+
+---
+
+## Project structure
+
+```
+docs-qa-assistant/
+├── backend/      # FastAPI app, ingestion, retrieval, eval harness, tests
+├── frontend/     # React + Vite chat UI with source citations
+├── documents/    # sample corpus
+├── docker-compose.yml
+└── .env.example
 ```
 
-Frontend:
+---
 
-```bash
-cd frontend
-npm install
-npm run dev -- --host 0.0.0.0
-```
+## License
 
-## Notes
+<!-- TODO: pick one, e.g. MIT -->
 
-This project is intentionally lean and follows the specific constraints requested for the v1 internal docs assistant: no auth, no multi-tenancy, no streaming, no cloud vector DB, and no custom training.
+## Author
+
+**Ihtasham Ali (IHT)** — [GitHub](https://github.com/ihtali) · [LinkedIn](https://linkedin.com/in/ihtasham-ali)
